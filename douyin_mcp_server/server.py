@@ -5,23 +5,11 @@
 该服务器提供以下功能：
 1. 解析抖音分享链接获取无水印视频链接
 2. 下载视频并提取音频
-3. 从音频中提取文本内容
-4. 自动清理中间文件
 """
 
-import os
 import re
 import json
 import requests
-import tempfile
-import asyncio
-from pathlib import Path
-from typing import Optional, Tuple
-import ffmpeg
-from tqdm.asyncio import tqdm
-from urllib import request
-from http import HTTPStatus
-import dashscope
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp import Context
@@ -32,22 +20,18 @@ mcp = FastMCP("Douyin MCP Server",
 
 # 请求头，模拟移动端访问
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) EdgiOS/121.0.2277.107 Version/17.0 Mobile/15E148 Safari/604.1'
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (HTML, like Gecko) '
+                  'EdgeOS/121.0.2277.107 Version/17.0 Mobile/15E148 Safari/604.1'
 }
-
-# 默认 API 配置
-DEFAULT_MODEL = "paraformer-v2"
 
 
 class DouyinProcessor:
     """抖音视频处理器"""
 
-    def __init__(self, api_key: str, model: Optional[str] = None):
-        self.api_key = api_key
-        self.model = model or DEFAULT_MODEL
-        self.temp_dir = Path(tempfile.mkdtemp())
-        # 设置阿里云百炼API密钥
-        dashscope.api_key = api_key
+    def __init__(self, share_link: str):
+        # 将self.temp_dir赋值为当前项目的tmp路径
+        self.cache_dir = "../tmp"
+        self.share_link = share_link
 
     def __del__(self):
         """清理临时目录"""
@@ -55,10 +39,11 @@ class DouyinProcessor:
         if hasattr(self, 'temp_dir') and self.temp_dir.exists():
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def parse_share_url(self, share_text: str) -> dict:
+    def parse_share_url(self) -> dict:
         """从分享文本中提取无水印视频链接"""
         # 提取分享链接
-        urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', share_text)
+        urls = re.findall(r'https?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*(),]|%[0-9a-fA-F][0-9a-fA-F])+',
+                          self.share_link)
         if not urls:
             raise ValueError("未找到有效的分享链接")
 
@@ -82,13 +67,13 @@ class DouyinProcessor:
 
         # 解析JSON数据
         json_data = json.loads(find_res.group(1).strip())
-        VIDEO_ID_PAGE_KEY = "video_(id)/page"
-        NOTE_ID_PAGE_KEY = "note_(id)/page"
+        video_id_page_key = "video_(id)/page"
+        note_id_page_key = "note_(id)/page"
 
-        if VIDEO_ID_PAGE_KEY in json_data["loaderData"]:
-            original_video_info = json_data["loaderData"][VIDEO_ID_PAGE_KEY]["videoInfoRes"]
-        elif NOTE_ID_PAGE_KEY in json_data["loaderData"]:
-            original_video_info = json_data["loaderData"][NOTE_ID_PAGE_KEY]["videoInfoRes"]
+        if video_id_page_key in json_data["loaderData"]:
+            original_video_info = json_data["loaderData"][video_id_page_key]["videoInfoRes"]
+        elif note_id_page_key in json_data["loaderData"]:
+            original_video_info = json_data["loaderData"][note_id_page_key]["videoInfoRes"]
         else:
             raise Exception("无法从JSON中解析视频或图集信息")
 
@@ -110,7 +95,7 @@ class DouyinProcessor:
     async def download_video(self, video_info: dict, ctx: Context) -> str:
         """异步下载视频到临时目录"""
         filename = f"{video_info['title']}.mp4"
-        filepath = f"/Users/limingze/PycharmProjects/douyin-mcp-server/{filename}"
+        filepath = f"{self.cache_dir}/{filename}"
 
         await ctx.info(f"正在下载视频: {video_info['title']}")
 
@@ -134,12 +119,6 @@ class DouyinProcessor:
         await ctx.info(f"视频下载完成: {filepath}")
         return filepath
 
-    def cleanup_files(self, *file_paths: Path):
-        """清理指定的文件"""
-        for file_path in file_paths:
-            if file_path.exists():
-                file_path.unlink()
-
 
 @mcp.tool()
 def get_douyin_download_link(share_link: str) -> str:
@@ -153,8 +132,8 @@ def get_douyin_download_link(share_link: str) -> str:
     - 包含下载链接和视频信息的JSON字符串
     """
     try:
-        processor = DouyinProcessor("")  # 获取下载链接不需要API密钥
-        video_info = processor.parse_share_url(share_link)
+        processor = DouyinProcessor(share_link)
+        video_info = processor.parse_share_url()
 
         return json.dumps({
             "status": "success",
@@ -184,8 +163,8 @@ def parse_douyin_video_info(share_link: str) -> str:
     - 视频信息（JSON格式字符串）
     """
     try:
-        processor = DouyinProcessor("")  # 不需要API密钥来解析链接
-        video_info = processor.parse_share_url(share_link)
+        processor = DouyinProcessor(share_link)
+        video_info = processor.parse_share_url()
 
         return json.dumps({
             "video_id": video_info["video_id"],
@@ -213,8 +192,8 @@ async def download_douyin_video(share_link: str, context: Context) -> str:
     返回:
     - 保存路径
     """
-    processor = DouyinProcessor("")  # 获取下载链接不需要API密钥
-    video_info = processor.parse_share_url(share_link)
+    processor = DouyinProcessor(share_link)
+    video_info = processor.parse_share_url()
     video_path = await processor.download_video(video_info, context)
     return json.dumps({
         "status": "success",
@@ -235,8 +214,8 @@ def get_video_info(video_id: str) -> str:
     """
     share_url = f"https://www.iesdouyin.com/share/video/{video_id}"
     try:
-        processor = DouyinProcessor("")
-        video_info = processor.parse_share_url(share_url)
+        processor = DouyinProcessor(share_url)
+        video_info = processor.parse_share_url()
         return json.dumps(video_info, ensure_ascii=False, indent=2)
     except Exception as e:
         return f"获取视频信息失败: {str(e)}"
