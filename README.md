@@ -1,4 +1,4 @@
-# 抖音无水印视频文本提取 MCP 服务器
+# ---
 
 [![PyPI version](https://badge.fury.io/py/douyin-mcp-server.svg)](https://badge.fury.io/py/douyin-mcp-server)
 [![Python version](https://img.shields.io/pypi/pyversions/douyin-mcp-server.svg)](https://pypi.org/project/douyin-mcp-server/)
